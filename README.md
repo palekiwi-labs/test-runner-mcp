@@ -1,3 +1,3 @@
-# RSpec MCP server
+# Test Runner MCP server
 
 TODO
