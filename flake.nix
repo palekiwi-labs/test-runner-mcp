@@ -1,5 +1,5 @@
 {
-  description = "A Rust flake for rspec-mcp";
+  description = "A Rust flake for test-runner-mcp";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
