@@ -12,13 +12,16 @@ use crate::test_runner::TestRunner;
 
 #[derive(Parser, Debug)]
 #[command(name = "test-runner-mcp")]
-#[command(about = "Test runner MCP server over HTTP with SSE")]
+#[command(about = "Configurable test runner MCP server over HTTP with SSE")]
 struct Cli {
     #[arg(short = 'H', long, default_value = "127.0.0.1")]
     hostname: String,
     
     #[arg(short, long, default_value = "30301")]
     port: u16,
+    
+    #[arg(short = 'c', long, default_value = "bundle exec rspec")]
+    rspec_command: String,
 }
 
 #[tokio::main]
@@ -33,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("Starting Docker Test Runner MCP server on {}", bind_address);
+    tracing::info!("Starting Test Runner MCP server on {}", bind_address);
 
     let config = SseServerConfig {
         bind: bind_address,
@@ -62,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let ct = sse_server.with_service(TestRunner::new);
+    let ct = sse_server.with_service(move || TestRunner::new(cli.rspec_command.clone()));
 
     tracing::info!("Test Runner MCP server is running!");
     tracing::info!("SSE endpoint: http://{}/sse", bind_address);
