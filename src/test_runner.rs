@@ -1,12 +1,10 @@
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
-    handler::server::{
-        router::tool::ToolRouter,
-        wrapper::Parameters,
-    },
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
-    tool, tool_handler, tool_router, schemars,
+    schemars,
     service::RequestContext,
+    tool, tool_handler, tool_router,
 };
 use tokio::process::Command;
 
@@ -38,12 +36,12 @@ impl TestRunner {
     ) -> Result<CallToolResult, McpError> {
         let command_parts: Vec<&str> = self.rspec_command.split_whitespace().collect();
         let mut cmd = Command::new(command_parts[0]);
-        
+
         // Add the rest of the command parts as arguments
         for part in &command_parts[1..] {
             cmd.arg(part);
         }
-        
+
         // Add the file argument
         cmd.arg(&args.file);
 
@@ -66,8 +64,6 @@ impl TestRunner {
             )),
         }
     }
-
-
 }
 
 #[tool_handler]
@@ -107,10 +103,10 @@ mod tests {
     #[tokio::test]
     async fn test_run_rspec_tool() {
         let router = TestRunner::new("bundle exec rspec".to_string()).tool_router;
-        
+
         let tools = router.list_all();
         assert_eq!(tools.len(), 1);
-        
+
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(tool_names.contains(&"run_rspec"));
     }
@@ -122,7 +118,7 @@ mod tests {
             "file": "spec/models/user_spec.rb"
         }
         "#;
-        
+
         let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.file, "spec/models/user_spec.rb");
     }

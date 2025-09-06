@@ -16,10 +16,10 @@ use crate::test_runner::TestRunner;
 struct Cli {
     #[arg(short = 'H', long, default_value = "127.0.0.1")]
     hostname: String,
-    
+
     #[arg(short, long, default_value = "30301")]
     port: u16,
-    
+
     #[arg(short = 'c', long, default_value = "bundle exec rspec")]
     rspec_command: String,
 }
