@@ -24,18 +24,18 @@ pub struct ParsedFilePath {
 impl ParsedFilePath {
     fn parse(input: &str) -> Result<Self, String> {
         let parts: Vec<&str> = input.split(':').collect();
-        
+
         if parts.is_empty() || parts[0].is_empty() {
             return Err("Empty file path".to_string());
         }
-        
+
         let file_path = parts[0].to_string();
-        
+
         // Validate file path format
         Self::validate_file_path(&file_path)?;
-        
+
         let mut line_numbers = Vec::new();
-        
+
         // Parse line numbers (skip first part which is file path)
         for part in &parts[1..] {
             match part.parse::<u32>() {
@@ -43,38 +43,38 @@ impl ParsedFilePath {
                 _ => return Err(format!("Invalid line number: {}", part)),
             }
         }
-        
+
         Ok(ParsedFilePath {
             file_path,
             line_numbers,
             original_input: input.to_string(),
         })
     }
-    
+
     fn validate_file_path(path: &str) -> Result<(), String> {
-        // Remove optional "./" prefix for validation
-        let clean_path = path.strip_prefix("./").unwrap_or(path);
-        
-        // Must end with _spec.rb
-        if !clean_path.ends_with("_spec.rb") {
-            return Err("File must be an RSpec test file (*_spec.rb)".to_string());
+        // Block dangerous characters first
+        if path.contains('\0') || path.contains('\n') {
+            return Err("Invalid characters in file path".to_string());
         }
-        
+
         // Prevent path traversal
         if path.contains("../") {
             return Err("Path traversal not allowed".to_string());
         }
-        
+
+        // Remove optional "./" prefix for validation
+        let clean_path = path.strip_prefix("./").unwrap_or(path);
+
         // Basic format validation - must have more than just "_spec.rb"
         if clean_path.len() <= "_spec.rb".len() || clean_path == "_spec.rb" {
             return Err("Invalid file path format".to_string());
         }
-        
-        // Block dangerous characters
-        if path.contains('\0') || path.contains('\n') {
-            return Err("Invalid characters in file path".to_string());
+
+        // Must end with _spec.rb
+        if !clean_path.ends_with("_spec.rb") {
+            return Err("File must be an RSpec test file (*_spec.rb)".to_string());
         }
-        
+
         Ok(())
     }
 }
@@ -288,11 +288,11 @@ mod tests {
     fn test_validate_non_rspec_extensions() {
         let test_cases = vec![
             "spec/user_test.rb",
-            "spec/user.rb", 
+            "spec/user.rb",
             "spec/user_spec.py",
             "spec/user_spec.js"
         ];
-        
+
         for case in test_cases {
             let result = ParsedFilePath::parse(case);
             assert!(result.is_err(), "Should reject {}", case);
