@@ -26,6 +26,29 @@ Start the server with a custom RSpec command:
 ./test-runner-mcp --hostname 0.0.0.0 --port 3030 --rspec-command "bundle exec rspec"
 ```
 
+## Nix
+
+### Development Environment
+```bash
+nix develop
+```
+
+### Building
+```bash
+nix build
+```
+
+### Running
+```bash
+# Run with nix (specify .#default explicitly to pass arguments)
+nix run .#default -- --help
+nix run .#default -- -H 0.0.0.0 -p 3030
+
+# Or run the built binary directly
+nix build
+./result/bin/test-runner-mcp -H 0.0.0.0 -p 3030
+```
+
 ## CLI Options
 
 - `-H, --hostname <HOSTNAME>` - Server hostname (default: 127.0.0.1)
