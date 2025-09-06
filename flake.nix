@@ -30,10 +30,10 @@
     {
       packages.${system}.default = pkgs.rustPlatform.buildRustPackage ({
         pname = "test-runner-mcp";
-        version = "0.1.0";
+        version = "0.1.1";
         src = ./.;
         
-        cargoHash = "sha256-Wdo7dIlQfQGABeR1Kvd7096sLXnqn3YpZvXHlI41ULk=";
+        cargoHash = "sha256-HPZDH/O/sMdPrL9BaJK/5Q23quyHQPQE6yADJ5PQkt4=";
         
         nativeBuildInputs = commonNativeBuildInputs;
         buildInputs = commonBuildInputs;
