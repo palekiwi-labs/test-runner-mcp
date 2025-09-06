@@ -10,7 +10,7 @@ use tokio::process::Command;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TestRunnerArgs {
-    /// Test file to run with optional line numbers (e.g., "spec/models/user_spec.rb:37:87")
+    /// RSpec test file to run with optional line numbers (e.g., "spec/models/user_spec.rb:37:87")
     pub file: String,
 }
 
@@ -30,6 +30,10 @@ impl ParsedFilePath {
         }
         
         let file_path = parts[0].to_string();
+        
+        // Validate file path format
+        Self::validate_file_path(&file_path)?;
+        
         let mut line_numbers = Vec::new();
         
         // Parse line numbers (skip first part which is file path)
@@ -45,6 +49,33 @@ impl ParsedFilePath {
             line_numbers,
             original_input: input.to_string(),
         })
+    }
+    
+    fn validate_file_path(path: &str) -> Result<(), String> {
+        // Remove optional "./" prefix for validation
+        let clean_path = path.strip_prefix("./").unwrap_or(path);
+        
+        // Must end with _spec.rb
+        if !clean_path.ends_with("_spec.rb") {
+            return Err("File must be an RSpec test file (*_spec.rb)".to_string());
+        }
+        
+        // Prevent path traversal
+        if path.contains("../") {
+            return Err("Path traversal not allowed".to_string());
+        }
+        
+        // Basic format validation - must have more than just "_spec.rb"
+        if clean_path.len() <= "_spec.rb".len() || clean_path == "_spec.rb" {
+            return Err("Invalid file path format".to_string());
+        }
+        
+        // Block dangerous characters
+        if path.contains('\0') || path.contains('\n') {
+            return Err("Invalid characters in file path".to_string());
+        }
+        
+        Ok(())
     }
 }
 
@@ -199,22 +230,73 @@ mod tests {
 
     #[test]
     fn test_parse_invalid_line_number() {
-        let result = ParsedFilePath::parse("spec/file.rb:abc");
+        let result = ParsedFilePath::parse("spec/file_spec.rb:abc");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid line number: abc");
     }
 
     #[test]
     fn test_parse_zero_line_number() {
-        let result = ParsedFilePath::parse("spec/file.rb:0");
+        let result = ParsedFilePath::parse("spec/file_spec.rb:0");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid line number: 0");
     }
 
     #[test]
     fn test_parse_negative_line_number() {
-        let result = ParsedFilePath::parse("spec/file.rb:-5");
+        let result = ParsedFilePath::parse("spec/file_spec.rb:-5");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid line number: -5");
+    }
+
+    #[test]
+    fn test_validate_rspec_file_extension() {
+        let result = ParsedFilePath::parse("spec/models/user.rb");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "File must be an RSpec test file (*_spec.rb)");
+    }
+
+    #[test]
+    fn test_validate_rspec_file_with_optional_prefix() {
+        let parsed = ParsedFilePath::parse("./spec/models/user_spec.rb").unwrap();
+        assert_eq!(parsed.file_path, "./spec/models/user_spec.rb");
+        assert!(parsed.line_numbers.is_empty());
+    }
+
+    #[test]
+    fn test_validate_path_traversal_prevention() {
+        let result = ParsedFilePath::parse("../spec/user_spec.rb");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Path traversal not allowed");
+    }
+
+    #[test]
+    fn test_validate_only_spec_extension() {
+        let result = ParsedFilePath::parse("_spec.rb");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid file path format");
+    }
+
+    #[test]
+    fn test_validate_dangerous_characters() {
+        let result = ParsedFilePath::parse("spec/user_spec.rb\0");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid characters in file path");
+    }
+
+    #[test]
+    fn test_validate_non_rspec_extensions() {
+        let test_cases = vec![
+            "spec/user_test.rb",
+            "spec/user.rb", 
+            "spec/user_spec.py",
+            "spec/user_spec.js"
+        ];
+        
+        for case in test_cases {
+            let result = ParsedFilePath::parse(case);
+            assert!(result.is_err(), "Should reject {}", case);
+            assert_eq!(result.unwrap_err(), "File must be an RSpec test file (*_spec.rb)");
+        }
     }
 }
