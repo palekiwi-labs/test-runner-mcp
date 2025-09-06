@@ -10,7 +10,10 @@ use tokio::process::Command;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TestRunnerArgs {
-    /// RSpec test file to run with optional line numbers (e.g., "spec/models/user_spec.rb:37:87")
+    #[schemars(
+        description = "RSpec test file path. Include line numbers after colons for specific tests (e.g., 'spec/models/user_spec.rb:37:87')",
+        example = "spec/models/user_spec.rb:37:87"
+    )]
     pub file: String,
 }
 
@@ -94,7 +97,7 @@ impl TestRunner {
         }
     }
 
-    #[tool(description = "Run tests using the configured command")]
+    #[tool(description = "Run RSpec tests for a specific file with optional line number targeting. Accepts file paths ending in '_spec.rb' with optional colon-separated line numbers (e.g., 'spec/models/user_spec.rb:37:87')")]
     async fn run_rspec(
         &self,
         Parameters(args): Parameters<TestRunnerArgs>,
