@@ -30,7 +30,7 @@ impl TestRunner {
     }
 
     #[tool(description = "Run RSpec tests using docker compose")]
-    async fn run_tests(
+    async fn run_rspec(
         &self,
         Parameters(args): Parameters<TestRunnerArgs>,
     ) -> Result<CallToolResult, McpError> {
@@ -82,7 +82,7 @@ impl ServerHandler for TestRunner {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "RSpec test runner server using docker compose. Tool: run_tests (run RSpec tests for a file)."
+                "RSpec test runner server using docker compose. Tool: run_rspec (run RSpec tests for a file)."
                     .to_string(),
             ),
         }
@@ -107,14 +107,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_run_tests_tool() {
+    async fn test_run_rspec_tool() {
         let router = TestRunner::tool_router();
         
         let tools = router.list_all();
         assert_eq!(tools.len(), 1);
         
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert!(tool_names.contains(&"run_tests"));
+        assert!(tool_names.contains(&"run_rspec"));
     }
 
     #[test]
