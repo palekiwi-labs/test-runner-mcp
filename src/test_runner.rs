@@ -1,12 +1,10 @@
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
-    handler::server::{
-        router::tool::ToolRouter,
-        wrapper::Parameters,
-    },
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
-    tool, tool_handler, tool_router, schemars,
+    schemars,
     service::RequestContext,
+    tool, tool_handler, tool_router,
 };
 use tokio::process::Command;
 
@@ -19,57 +17,53 @@ pub struct TestRunnerArgs {
 #[derive(Clone)]
 pub struct TestRunner {
     tool_router: ToolRouter<TestRunner>,
+    rspec_command: String,
 }
 
 #[tool_router]
 impl TestRunner {
-    pub fn new() -> Self {
+    pub fn new(rspec_command: String) -> Self {
         Self {
             tool_router: Self::tool_router(),
+            rspec_command,
         }
     }
 
-    #[tool(description = "Run RSpec tests using docker compose")]
-    async fn run_tests(
+    #[tool(description = "Run tests using the configured command")]
+    async fn run_rspec(
         &self,
         Parameters(args): Parameters<TestRunnerArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let mut docker_cmd = Command::new("docker");
-        docker_cmd
-            .arg("compose")
-            .arg("-f")
-            .arg("/home/pl/code/ygt/spabreaks/docker-compose.yml")
-            .arg("exec")
-            .arg("-T")
-            .arg("test")
-            .arg("bundle")
-            .arg("exec")
-            .arg("rspec")
-            .arg("--format")
-            .arg("p")
-            .arg(&args.file);
+        let command_parts: Vec<&str> = self.rspec_command.split_whitespace().collect();
+        let mut cmd = Command::new(command_parts[0]);
 
-        match docker_cmd.output().await {
+        // Add the rest of the command parts as arguments
+        for part in &command_parts[1..] {
+            cmd.arg(part);
+        }
+
+        // Add the file argument
+        cmd.arg(&args.file);
+
+        match cmd.output().await {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let status = output.status.code().unwrap_or(-1);
 
                 let result_text = format!(
-                    "RSpec Test Results for: {}\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
+                    "Test Results for: {}\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
                     args.file, status, stdout, stderr
                 );
 
                 Ok(CallToolResult::success(vec![Content::text(result_text)]))
             }
             Err(e) => Err(McpError::internal_error(
-                format!("Docker compose command failed: {}", e),
+                format!("Command failed: {}", e),
                 None,
             )),
         }
     }
-
-
 }
 
 #[tool_handler]
@@ -82,7 +76,7 @@ impl ServerHandler for TestRunner {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "RSpec test runner server using docker compose. Tool: run_tests (run RSpec tests for a file)."
+                "Test runner server using configurable command. Tool: run_rspec (run tests for a file)."
                     .to_string(),
             ),
         }
@@ -107,14 +101,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_run_tests_tool() {
-        let router = TestRunner::tool_router();
-        
+    async fn test_run_rspec_tool() {
+        let router = TestRunner::new("bundle exec rspec".to_string()).tool_router;
+
         let tools = router.list_all();
         assert_eq!(tools.len(), 1);
-        
+
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert!(tool_names.contains(&"run_tests"));
+        assert!(tool_names.contains(&"run_rspec"));
     }
 
     #[test]
@@ -124,7 +118,7 @@ mod tests {
             "file": "spec/models/user_spec.rb"
         }
         "#;
-        
+
         let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.file, "spec/models/user_spec.rb");
     }

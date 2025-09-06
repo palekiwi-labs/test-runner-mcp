@@ -1,4 +1,6 @@
+use clap::Parser;
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
+use std::net::SocketAddr;
 use tracing_subscriber::{
     layer::SubscriberExt,
     util::SubscriberInitExt,
@@ -8,14 +10,24 @@ use tracing_subscriber::{
 mod test_runner;
 use crate::test_runner::TestRunner;
 
-const BIND_ADDRESS: &str = "0.0.0.0:30301";
+#[derive(Parser, Debug)]
+#[command(name = "test-runner-mcp")]
+#[command(about = "Configurable test runner MCP server over HTTP with SSE")]
+struct Cli {
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
+    hostname: String,
 
-/// Docker test runner MCP server over HTTP with SSE
-/// Usage: cargo run -p mcp-server-examples --example test_runner_sse
-/// Then connect via HTTP to http://127.0.0.1:8001/sse for SSE endpoint
-/// and POST to http://127.0.0.1:8001/message for sending messages
+    #[arg(short, long, default_value = "30301")]
+    port: u16,
+
+    #[arg(short = 'c', long, default_value = "bundle exec rspec")]
+    rspec_command: String,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let bind_address: SocketAddr = format!("{}:{}", cli.hostname, cli.port).parse()?;
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -24,10 +36,10 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("Starting Docker Test Runner MCP server on {}", BIND_ADDRESS);
+    tracing::info!("Starting Test Runner MCP server on {}", bind_address);
 
     let config = SseServerConfig {
-        bind: BIND_ADDRESS.parse()?,
+        bind: bind_address,
         sse_path: "/sse".to_string(),
         post_path: "/message".to_string(),
         ct: tokio_util::sync::CancellationToken::new(),
@@ -53,11 +65,11 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let ct = sse_server.with_service(TestRunner::new);
+    let ct = sse_server.with_service(move || TestRunner::new(cli.rspec_command.clone()));
 
     tracing::info!("Test Runner MCP server is running!");
-    tracing::info!("SSE endpoint: http://{}/sse", BIND_ADDRESS);
-    tracing::info!("Message endpoint: http://{}/message", BIND_ADDRESS);
+    tracing::info!("SSE endpoint: http://{}/sse", bind_address);
+    tracing::info!("Message endpoint: http://{}/message", bind_address);
     tracing::info!("Press Ctrl+C to stop");
 
     tokio::signal::ctrl_c().await?;
