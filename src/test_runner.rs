@@ -102,10 +102,12 @@ impl TestRunner {
         // Parse the file path and validate format
         let parsed_file = match ParsedFilePath::parse(&args.file) {
             Ok(parsed) => parsed,
-            Err(e) => return Err(McpError::invalid_params(
-                format!("Invalid file path format: {}", e),
-                None,
-            )),
+            Err(e) => {
+                return Err(McpError::invalid_params(
+                    format!("Invalid file path format: {}", e),
+                    None,
+                ));
+            }
         };
 
         let command_parts: Vec<&str> = self.rspec_command.split_whitespace().collect();
@@ -253,7 +255,10 @@ mod tests {
     fn test_validate_rspec_file_extension() {
         let result = ParsedFilePath::parse("spec/models/user.rb");
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "File must be an RSpec test file (*_spec.rb)");
+        assert_eq!(
+            result.unwrap_err(),
+            "File must be an RSpec test file (*_spec.rb)"
+        );
     }
 
     #[test]
@@ -290,13 +295,16 @@ mod tests {
             "spec/user_test.rb",
             "spec/user.rb",
             "spec/user_spec.py",
-            "spec/user_spec.js"
+            "spec/user_spec.js",
         ];
 
         for case in test_cases {
             let result = ParsedFilePath::parse(case);
             assert!(result.is_err(), "Should reject {}", case);
-            assert_eq!(result.unwrap_err(), "File must be an RSpec test file (*_spec.rb)");
+            assert_eq!(
+                result.unwrap_err(),
+                "File must be an RSpec test file (*_spec.rb)"
+            );
         }
     }
 }
