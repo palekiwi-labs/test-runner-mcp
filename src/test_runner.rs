@@ -21,7 +21,6 @@ pub struct TestRunnerArgs {
 pub struct ParsedFilePath {
     pub file_path: String,
     pub line_numbers: Vec<u32>,
-    pub original_input: String,
 }
 
 impl ParsedFilePath {
@@ -50,7 +49,6 @@ impl ParsedFilePath {
         Ok(ParsedFilePath {
             file_path,
             line_numbers,
-            original_input: input.to_string(),
         })
     }
 
@@ -121,8 +119,13 @@ impl TestRunner {
             cmd.arg(part);
         }
 
-        // Add the file argument (use original input to preserve rspec format)
-        cmd.arg(&parsed_file.original_input);
+        // Build the RSpec file argument from parsed components
+        let rspec_arg = if parsed_file.line_numbers.is_empty() {
+            parsed_file.file_path.clone()
+        } else {
+            format!("{}:{}", parsed_file.file_path, parsed_file.line_numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(":"))
+        };
+        cmd.arg(&rspec_arg);
 
         match cmd.output().await {
             Ok(output) => {
@@ -132,7 +135,7 @@ impl TestRunner {
 
                 let result_text = format!(
                     "Test Results for: {}\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
-                    parsed_file.original_input, status, stdout, stderr
+                    rspec_arg, status, stdout, stderr
                 );
 
                 Ok(CallToolResult::success(vec![Content::text(result_text)]))
@@ -207,7 +210,6 @@ mod tests {
         let parsed = ParsedFilePath::parse("spec/models/user_spec.rb").unwrap();
         assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
         assert!(parsed.line_numbers.is_empty());
-        assert_eq!(parsed.original_input, "spec/models/user_spec.rb");
     }
 
     #[test]
@@ -215,7 +217,6 @@ mod tests {
         let parsed = ParsedFilePath::parse("spec/models/user_spec.rb:37").unwrap();
         assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
         assert_eq!(parsed.line_numbers, vec![37]);
-        assert_eq!(parsed.original_input, "spec/models/user_spec.rb:37");
     }
 
     #[test]
@@ -223,7 +224,6 @@ mod tests {
         let parsed = ParsedFilePath::parse("spec/models/user_spec.rb:37:87").unwrap();
         assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
         assert_eq!(parsed.line_numbers, vec![37, 87]);
-        assert_eq!(parsed.original_input, "spec/models/user_spec.rb:37:87");
     }
 
     #[test]
