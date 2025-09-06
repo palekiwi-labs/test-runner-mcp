@@ -66,14 +66,13 @@ impl ParsedFilePath {
         // Remove optional "./" prefix for validation
         let clean_path = path.strip_prefix("./").unwrap_or(path);
 
-        // Basic format validation - must have more than just "_spec.rb"
-        if clean_path.len() <= "_spec.rb".len() || clean_path == "_spec.rb" {
-            return Err("Invalid file path format".to_string());
-        }
-
-        // Must end with _spec.rb
+        // Must end with _spec.rb and have content before it
         if !clean_path.ends_with("_spec.rb") {
             return Err("File must be an RSpec test file (*_spec.rb)".to_string());
+        }
+        
+        if clean_path == "_spec.rb" {
+            return Err("Invalid file path format".to_string());
         }
 
         Ok(())
