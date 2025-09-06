@@ -10,8 +10,42 @@ use tokio::process::Command;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TestRunnerArgs {
-    /// Test file to run (e.g., "spec/models/user_spec.rb")
+    /// Test file to run with optional line numbers (e.g., "spec/models/user_spec.rb:37:87")
     pub file: String,
+}
+
+#[derive(Debug)]
+pub struct ParsedFilePath {
+    pub file_path: String,
+    pub line_numbers: Vec<u32>,
+    pub original_input: String,
+}
+
+impl ParsedFilePath {
+    fn parse(input: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = input.split(':').collect();
+        
+        if parts.is_empty() || parts[0].is_empty() {
+            return Err("Empty file path".to_string());
+        }
+        
+        let file_path = parts[0].to_string();
+        let mut line_numbers = Vec::new();
+        
+        // Parse line numbers (skip first part which is file path)
+        for part in &parts[1..] {
+            match part.parse::<u32>() {
+                Ok(line_num) if line_num > 0 => line_numbers.push(line_num),
+                _ => return Err(format!("Invalid line number: {}", part)),
+            }
+        }
+        
+        Ok(ParsedFilePath {
+            file_path,
+            line_numbers,
+            original_input: input.to_string(),
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -34,6 +68,15 @@ impl TestRunner {
         &self,
         Parameters(args): Parameters<TestRunnerArgs>,
     ) -> Result<CallToolResult, McpError> {
+        // Parse the file path and validate format
+        let parsed_file = match ParsedFilePath::parse(&args.file) {
+            Ok(parsed) => parsed,
+            Err(e) => return Err(McpError::invalid_params(
+                format!("Invalid file path format: {}", e),
+                None,
+            )),
+        };
+
         let command_parts: Vec<&str> = self.rspec_command.split_whitespace().collect();
         let mut cmd = Command::new(command_parts[0]);
 
@@ -42,8 +85,8 @@ impl TestRunner {
             cmd.arg(part);
         }
 
-        // Add the file argument
-        cmd.arg(&args.file);
+        // Add the file argument (use original input to preserve rspec format)
+        cmd.arg(&parsed_file.original_input);
 
         match cmd.output().await {
             Ok(output) => {
@@ -53,7 +96,7 @@ impl TestRunner {
 
                 let result_text = format!(
                     "Test Results for: {}\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
-                    args.file, status, stdout, stderr
+                    parsed_file.original_input, status, stdout, stderr
                 );
 
                 Ok(CallToolResult::success(vec![Content::text(result_text)]))
@@ -121,5 +164,57 @@ mod tests {
 
         let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.file, "spec/models/user_spec.rb");
+    }
+
+    #[test]
+    fn test_parse_file_path_without_line_numbers() {
+        let parsed = ParsedFilePath::parse("spec/models/user_spec.rb").unwrap();
+        assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
+        assert!(parsed.line_numbers.is_empty());
+        assert_eq!(parsed.original_input, "spec/models/user_spec.rb");
+    }
+
+    #[test]
+    fn test_parse_file_path_with_single_line_number() {
+        let parsed = ParsedFilePath::parse("spec/models/user_spec.rb:37").unwrap();
+        assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
+        assert_eq!(parsed.line_numbers, vec![37]);
+        assert_eq!(parsed.original_input, "spec/models/user_spec.rb:37");
+    }
+
+    #[test]
+    fn test_parse_file_path_with_multiple_line_numbers() {
+        let parsed = ParsedFilePath::parse("spec/models/user_spec.rb:37:87").unwrap();
+        assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
+        assert_eq!(parsed.line_numbers, vec![37, 87]);
+        assert_eq!(parsed.original_input, "spec/models/user_spec.rb:37:87");
+    }
+
+    #[test]
+    fn test_parse_empty_file_path() {
+        let result = ParsedFilePath::parse("");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Empty file path");
+    }
+
+    #[test]
+    fn test_parse_invalid_line_number() {
+        let result = ParsedFilePath::parse("spec/file.rb:abc");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid line number: abc");
+    }
+
+    #[test]
+    fn test_parse_zero_line_number() {
+        let result = ParsedFilePath::parse("spec/file.rb:0");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid line number: 0");
+    }
+
+    #[test]
+    fn test_parse_negative_line_number() {
+        let result = ParsedFilePath::parse("spec/file.rb:-5");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid line number: -5");
     }
 }
