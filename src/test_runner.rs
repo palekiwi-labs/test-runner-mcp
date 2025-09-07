@@ -11,43 +11,45 @@ use tokio::process::Command;
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TestRunnerArgs {
     #[schemars(
-        description = "RSpec test file path. Include line numbers after colons for specific tests (e.g., 'spec/models/user_spec.rb:37:87')",
-        example = "spec/models/user_spec.rb:37:87"
+        description = "RSpec test file path (must end with '_spec.rb')",
+        example = "spec/models/user_spec.rb"
     )]
     pub file: String,
+
+    #[schemars(
+        description = "Optional line numbers to target specific tests",
+        example = "[37, 87]"
+    )]
+    pub line_numbers: Option<Vec<i32>>,
 }
 
 #[derive(Debug)]
 pub struct ParsedFilePath {
     pub file_path: String,
-    pub line_numbers: Vec<u32>,
+    pub line_numbers: Vec<i32>,
 }
 
 impl ParsedFilePath {
-    fn parse(input: &str) -> Result<Self, String> {
-        let parts: Vec<&str> = input.split(':').collect();
-
-        if parts.is_empty() || parts[0].is_empty() {
+    fn from_args(file_path: &str, line_numbers: Vec<i32>) -> Result<Self, String> {
+        if file_path.is_empty() {
             return Err("Empty file path".to_string());
         }
 
-        let file_path = parts[0].to_string();
-
         // Validate file path format
-        Self::validate_file_path(&file_path)?;
+        Self::validate_file_path(file_path)?;
 
-        let mut line_numbers = Vec::new();
-
-        // Parse line numbers (skip first part which is file path)
-        for part in &parts[1..] {
-            match part.parse::<u32>() {
-                Ok(line_num) if line_num > 0 => line_numbers.push(line_num),
-                _ => return Err(format!("Invalid line number: {}", part)),
+        // Validate line numbers
+        for line_num in &line_numbers {
+            if *line_num <= 0 {
+                return Err(format!(
+                    "Line numbers must be positive integers, got: {}",
+                    line_num
+                ));
             }
         }
 
         Ok(ParsedFilePath {
-            file_path,
+            file_path: file_path.to_string(),
             line_numbers,
         })
     }
@@ -70,7 +72,7 @@ impl ParsedFilePath {
         if !clean_path.ends_with("_spec.rb") {
             return Err("File must be an RSpec test file (*_spec.rb)".to_string());
         }
-        
+
         if clean_path == "_spec.rb" {
             return Err("Invalid file path format".to_string());
         }
@@ -94,17 +96,20 @@ impl TestRunner {
         }
     }
 
-    #[tool(description = "Run RSpec tests for a specific file with optional line number targeting. Accepts file paths ending in '_spec.rb' with optional colon-separated line numbers (e.g., 'spec/models/user_spec.rb:37:87')")]
+    #[tool(
+        description = "Run RSpec tests for a specific file with optional line number targeting. Accepts file paths ending in '_spec.rb' with optional array of line numbers"
+    )]
     async fn run_rspec(
         &self,
         Parameters(args): Parameters<TestRunnerArgs>,
     ) -> Result<CallToolResult, McpError> {
         // Parse the file path and validate format
-        let parsed_file = match ParsedFilePath::parse(&args.file) {
+        let line_numbers = args.line_numbers.unwrap_or_default();
+        let parsed_file = match ParsedFilePath::from_args(&args.file, line_numbers) {
             Ok(parsed) => parsed,
             Err(e) => {
                 return Err(McpError::invalid_params(
-                    format!("Invalid file path format: {}", e),
+                    format!("Invalid parameters: {}", e),
                     None,
                 ));
             }
@@ -122,7 +127,16 @@ impl TestRunner {
         let rspec_arg = if parsed_file.line_numbers.is_empty() {
             parsed_file.file_path.clone()
         } else {
-            format!("{}:{}", parsed_file.file_path, parsed_file.line_numbers.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(":"))
+            format!(
+                "{}:{}",
+                parsed_file.file_path,
+                parsed_file
+                    .line_numbers
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(":")
+            )
         };
         cmd.arg(&rspec_arg);
 
@@ -202,60 +216,67 @@ mod tests {
 
         let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.file, "spec/models/user_spec.rb");
+        assert_eq!(args.line_numbers, None);
     }
 
     #[test]
-    fn test_parse_file_path_without_line_numbers() {
-        let parsed = ParsedFilePath::parse("spec/models/user_spec.rb").unwrap();
+    fn test_test_runner_args_with_line_numbers() {
+        let json = r#"
+        {
+            "file": "spec/models/user_spec.rb",
+            "line_numbers": [37, 87]
+        }
+        "#;
+
+        let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.file, "spec/models/user_spec.rb");
+        assert_eq!(args.line_numbers, Some(vec![37, 87]));
+    }
+
+    #[test]
+    fn test_from_args_without_line_numbers() {
+        let parsed = ParsedFilePath::from_args("spec/models/user_spec.rb", vec![]).unwrap();
         assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
         assert!(parsed.line_numbers.is_empty());
     }
 
     #[test]
-    fn test_parse_file_path_with_single_line_number() {
-        let parsed = ParsedFilePath::parse("spec/models/user_spec.rb:37").unwrap();
-        assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
-        assert_eq!(parsed.line_numbers, vec![37]);
-    }
-
-    #[test]
-    fn test_parse_file_path_with_multiple_line_numbers() {
-        let parsed = ParsedFilePath::parse("spec/models/user_spec.rb:37:87").unwrap();
+    fn test_from_args_with_line_numbers() {
+        let parsed = ParsedFilePath::from_args("spec/models/user_spec.rb", vec![37, 87]).unwrap();
         assert_eq!(parsed.file_path, "spec/models/user_spec.rb");
         assert_eq!(parsed.line_numbers, vec![37, 87]);
     }
 
     #[test]
-    fn test_parse_empty_file_path() {
-        let result = ParsedFilePath::parse("");
+    fn test_from_args_with_zero_line_number() {
+        let result = ParsedFilePath::from_args("spec/models/user_spec.rb", vec![0]);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Line numbers must be positive integers, got: 0"
+        );
+    }
+
+    #[test]
+    fn test_from_args_with_negative_line_number() {
+        let result = ParsedFilePath::from_args("spec/models/user_spec.rb", vec![-5]);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Line numbers must be positive integers, got: -5"
+        );
+    }
+
+    #[test]
+    fn test_from_args_empty_file_path() {
+        let result = ParsedFilePath::from_args("", vec![]);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Empty file path");
     }
 
     #[test]
-    fn test_parse_invalid_line_number() {
-        let result = ParsedFilePath::parse("spec/file_spec.rb:abc");
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Invalid line number: abc");
-    }
-
-    #[test]
-    fn test_parse_zero_line_number() {
-        let result = ParsedFilePath::parse("spec/file_spec.rb:0");
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Invalid line number: 0");
-    }
-
-    #[test]
-    fn test_parse_negative_line_number() {
-        let result = ParsedFilePath::parse("spec/file_spec.rb:-5");
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Invalid line number: -5");
-    }
-
-    #[test]
     fn test_validate_rspec_file_extension() {
-        let result = ParsedFilePath::parse("spec/models/user.rb");
+        let result = ParsedFilePath::from_args("spec/models/user.rb", vec![]);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -265,28 +286,28 @@ mod tests {
 
     #[test]
     fn test_validate_rspec_file_with_optional_prefix() {
-        let parsed = ParsedFilePath::parse("./spec/models/user_spec.rb").unwrap();
+        let parsed = ParsedFilePath::from_args("./spec/models/user_spec.rb", vec![]).unwrap();
         assert_eq!(parsed.file_path, "./spec/models/user_spec.rb");
         assert!(parsed.line_numbers.is_empty());
     }
 
     #[test]
     fn test_validate_path_traversal_prevention() {
-        let result = ParsedFilePath::parse("../spec/user_spec.rb");
+        let result = ParsedFilePath::from_args("../spec/user_spec.rb", vec![]);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Path traversal not allowed");
     }
 
     #[test]
     fn test_validate_only_spec_extension() {
-        let result = ParsedFilePath::parse("_spec.rb");
+        let result = ParsedFilePath::from_args("_spec.rb", vec![]);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid file path format");
     }
 
     #[test]
     fn test_validate_dangerous_characters() {
-        let result = ParsedFilePath::parse("spec/user_spec.rb\0");
+        let result = ParsedFilePath::from_args("spec/user_spec.rb\0", vec![]);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid characters in file path");
     }
@@ -301,7 +322,7 @@ mod tests {
         ];
 
         for case in test_cases {
-            let result = ParsedFilePath::parse(case);
+            let result = ParsedFilePath::from_args(case, vec![]);
             assert!(result.is_err(), "Should reject {}", case);
             assert_eq!(
                 result.unwrap_err(),
