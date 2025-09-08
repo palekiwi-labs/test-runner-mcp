@@ -14,11 +14,11 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       rustToolchain = fenix.packages.${system}.stable.toolchain;
-      
+
       # Common build dependencies
       commonNativeBuildInputs = with pkgs; [ pkg-config ];
       commonBuildInputs = with pkgs; [ openssl ];
-      
+
       # Common OpenSSL environment
       opensslEnv = {
         PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
@@ -30,14 +30,14 @@
     {
       packages.${system}.default = pkgs.rustPlatform.buildRustPackage ({
         pname = "test-runner-mcp";
-        version = "0.1.1";
+        version = "0.2.0";
         src = ./.;
-        
-        cargoHash = "sha256-HPZDH/O/sMdPrL9BaJK/5Q23quyHQPQE6yADJ5PQkt4=";
-        
+
+        cargoHash = "sha256-2oKq9byTo2+RcqpOdL3mQgcZtSeTgTYu2KK68JYEJpg=";
+
         nativeBuildInputs = commonNativeBuildInputs;
         buildInputs = commonBuildInputs;
-        
+
         meta = with pkgs.lib; {
           description = "A Rust flake for test-runner-mcp";
           license = licenses.mit;

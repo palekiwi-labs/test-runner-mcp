@@ -13,6 +13,7 @@ use crate::test_runner::TestRunner;
 #[derive(Parser, Debug)]
 #[command(name = "test-runner-mcp")]
 #[command(about = "Configurable test runner MCP server over HTTP with SSE")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[arg(short = 'H', long, default_value = "127.0.0.1")]
     hostname: String,
