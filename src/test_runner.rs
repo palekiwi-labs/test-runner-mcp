@@ -23,6 +23,15 @@ pub struct TestRunnerArgs {
     pub line_numbers: Option<Vec<i32>>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RspecArgs {
+    #[schemars(
+        description = "Raw arguments to pass to RSpec command",
+        example = r#"["--format", "json", "spec/models/", "--tag", "~slow"]"#
+    )]
+    pub args: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct ParsedFilePath {
     pub file_path: String,
@@ -93,6 +102,50 @@ impl TestRunner {
         Self {
             tool_router: Self::tool_router(),
             rspec_command,
+        }
+    }
+
+    #[tool(
+        description = "Run RSpec with raw arguments for full command-line flexibility"
+    )]
+    async fn run_rspec(
+        &self,
+        Parameters(args): Parameters<RspecArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let command_parts: Vec<&str> = self.rspec_command.split_whitespace().collect();
+        let mut cmd = Command::new(command_parts[0]);
+
+        // Add the rest of the command parts as arguments
+        for part in &command_parts[1..] {
+            cmd.arg(part);
+        }
+
+        // Add user-provided arguments
+        for arg in &args.args {
+            cmd.arg(arg);
+        }
+
+        match cmd.output().await {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let status = output.status.code().unwrap_or(-1);
+
+                let result_text = format!(
+                    "RSpec Command: {} {}\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
+                    self.rspec_command,
+                    args.args.join(" "),
+                    status,
+                    stdout,
+                    stderr
+                );
+
+                Ok(CallToolResult::success(vec![Content::text(result_text)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("Command failed: {}", e),
+                None,
+            )),
         }
     }
 
@@ -171,7 +224,7 @@ impl ServerHandler for TestRunner {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Test runner server using configurable command. Tool: run_rspec_file (run tests for a file)."
+                "Test runner server using configurable command. Tools: run_rspec (raw command access), run_rspec_file (run tests for a file)."
                     .to_string(),
             ),
         }
@@ -200,9 +253,10 @@ mod tests {
         let router = TestRunner::new("bundle exec rspec".to_string()).tool_router;
 
         let tools = router.list_all();
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert!(tool_names.contains(&"run_rspec"));
         assert!(tool_names.contains(&"run_rspec_file"));
     }
 
