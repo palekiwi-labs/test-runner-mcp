@@ -99,7 +99,7 @@ impl TestRunner {
     #[tool(
         description = "Run RSpec tests for a specific file with optional line number targeting. Accepts file paths ending in '_spec.rb' with optional array of line numbers"
     )]
-    async fn run_rspec(
+    async fn run_rspec_file(
         &self,
         Parameters(args): Parameters<TestRunnerArgs>,
     ) -> Result<CallToolResult, McpError> {
@@ -171,7 +171,7 @@ impl ServerHandler for TestRunner {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Test runner server using configurable command. Tool: run_rspec (run tests for a file)."
+                "Test runner server using configurable command. Tool: run_rspec_file (run tests for a file)."
                     .to_string(),
             ),
         }
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(tools.len(), 1);
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert!(tool_names.contains(&"run_rspec"));
+        assert!(tool_names.contains(&"run_rspec_file"));
     }
 
     #[test]
