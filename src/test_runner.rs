@@ -8,8 +8,40 @@ use rmcp::{
 };
 use tokio::process::Command;
 
+const ALLOWED_RSPEC_FLAGS: &[&str] = &[
+    "--format",
+    "-f",
+    "--out",
+    "-o",
+    "--require",
+    "-r",
+    "--pattern",
+    "-P",
+    "--tag",
+    "-t",
+    "--example",
+    "-e",
+    "--line_number",
+    "-l",
+    "--order",
+    "--seed",
+    "--backtrace",
+    "-b",
+    "--color",
+    "--no-color",
+    "--profile",
+    "-p",
+    "--dry-run",
+    "-d",
+    "--fail-fast",
+    "-x",
+    "--no-fail-fast",
+    "--warnings",
+    "--deprecation-out",
+];
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct TestRunnerArgs {
+pub struct RspecFileArgs {
     #[schemars(
         description = "RSpec test file path (must end with '_spec.rb')",
         example = "spec/models/user_spec.rb"
@@ -21,6 +53,15 @@ pub struct TestRunnerArgs {
         example = "[37, 87]"
     )]
     pub line_numbers: Option<Vec<i32>>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RspecArgs {
+    #[schemars(
+        description = "Raw arguments to pass to RSpec command",
+        example = r#"["--format", "json", "spec/models/", "--tag", "~slow"]"#
+    )]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -79,12 +120,178 @@ impl ParsedFilePath {
 
         Ok(())
     }
+
+    fn validate_output_path(path: &str) -> Result<(), String> {
+        // Block dangerous characters
+        if path.contains('\0') || path.contains('\n') {
+            return Err("Invalid characters in output path".to_string());
+        }
+
+        // Prevent path traversal
+        if path.contains("../") {
+            return Err("Path traversal not allowed in output path".to_string());
+        }
+
+        // Block absolute paths
+        if path.starts_with('/') {
+            return Err("Absolute paths not allowed for output".to_string());
+        }
+
+        // Only allow safe directories
+        let allowed_prefixes = ["tmp/", "reports/", "output/", "coverage/"];
+        if !allowed_prefixes
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        {
+            return Err(
+                "Output path must be in allowed directory (tmp/, reports/, output/, coverage/)"
+                    .to_string(),
+            );
+        }
+
+        Ok(())
+    }
+
+    fn validate_require_path(path: &str) -> Result<(), String> {
+        // Block dangerous characters
+        if path.contains('\0') || path.contains('\n') {
+            return Err("Invalid characters in require path".to_string());
+        }
+
+        // Prevent path traversal
+        if path.contains("../") {
+            return Err("Path traversal not allowed in require path".to_string());
+        }
+
+        // Block absolute paths outside project
+        if path.starts_with('/') {
+            return Err("Absolute paths not allowed for require".to_string());
+        }
+
+        // Must be .rb file
+        if !path.ends_with(".rb") {
+            return Err("Require path must be a Ruby file (.rb)".to_string());
+        }
+
+        Ok(())
+    }
+
+    fn sanitize_value(value: &str) -> Result<(), String> {
+        // Check for dangerous shell metacharacters
+        let dangerous_chars = [';', '&', '|', '$', '`', '(', ')', '<', '>', '"', '\''];
+        for &ch in &dangerous_chars {
+            if value.contains(ch) {
+                return Err(format!("Argument contains dangerous character: '{}'", ch));
+            }
+        }
+
+        // Limit argument length
+        if value.len() > 1000 {
+            return Err("Argument too long (max 1000 characters)".to_string());
+        }
+
+        Ok(())
+    }
+
+    fn validate_numeric_value(value: &str, flag_name: &str) -> Result<(), String> {
+        if value.parse::<u32>().is_err() {
+            return Err(format!(
+                "Invalid numeric value for {}: {}",
+                flag_name, value
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
 pub struct TestRunner {
     tool_router: ToolRouter<TestRunner>,
     rspec_command: String,
+}
+
+fn validate_rspec_args(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Ok(());
+    }
+
+    // Limit total number of arguments
+    if args.len() > 50 {
+        return Err("Too many arguments (max 50)".to_string());
+    }
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+
+        // Sanitize all arguments
+        ParsedFilePath::sanitize_value(arg)?;
+
+        // Check if it's a flag
+        if arg.starts_with('-') {
+            if !ALLOWED_RSPEC_FLAGS.contains(&arg.as_str()) {
+                return Err(format!("Disallowed flag: {}", arg));
+            }
+
+            // Validate flag-specific values
+            match arg.as_str() {
+                "--out" | "-o" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err("Missing value for --out flag".to_string());
+                    }
+                    ParsedFilePath::sanitize_value(&args[i])?;
+                    ParsedFilePath::validate_output_path(&args[i])?;
+                }
+                "--require" | "-r" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err("Missing value for --require flag".to_string());
+                    }
+                    ParsedFilePath::sanitize_value(&args[i])?;
+                    ParsedFilePath::validate_require_path(&args[i])?;
+                }
+                "--seed" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err("Missing value for --seed flag".to_string());
+                    }
+                    ParsedFilePath::sanitize_value(&args[i])?;
+                    ParsedFilePath::validate_numeric_value(&args[i], "--seed")?;
+                }
+                "--profile" | "-p" => {
+                    // Check if next argument exists and is numeric (optional for --profile)
+                    if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                        i += 1;
+                        ParsedFilePath::sanitize_value(&args[i])?;
+                        ParsedFilePath::validate_numeric_value(&args[i], "--profile")?;
+                    }
+                }
+                "--format" | "-f" | "--tag" | "-t" | "--example" | "-e" | "--pattern" | "-P"
+                | "--order" | "--deprecation-out" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(format!("Missing value for {} flag", arg));
+                    }
+                    ParsedFilePath::sanitize_value(&args[i])?;
+                }
+                // Flags that don't require values
+                "--backtrace" | "-b" | "--color" | "--no-color" | "--dry-run" | "-d"
+                | "--fail-fast" | "-x" | "--no-fail-fast" | "--warnings" => {
+                    // No additional validation needed
+                }
+                _ => {
+                    // This shouldn't happen due to allowlist check, but be safe
+                    return Err(format!("Unhandled flag: {}", arg));
+                }
+            }
+        } else {
+            // Treat as file path - apply same validation as run_rspec_file
+            ParsedFilePath::validate_file_path(arg)?;
+        }
+        i += 1;
+    }
+    Ok(())
 }
 
 #[tool_router]
@@ -96,12 +303,62 @@ impl TestRunner {
         }
     }
 
+    #[tool(description = "Run RSpec with raw arguments for full command-line flexibility")]
+    async fn run_rspec(
+        &self,
+        Parameters(args): Parameters<RspecArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // Validate arguments for security
+        if let Err(e) = validate_rspec_args(&args.args) {
+            return Err(McpError::invalid_params(
+                format!("Invalid RSpec arguments: {}", e),
+                None,
+            ));
+        }
+
+        let command_parts: Vec<&str> = self.rspec_command.split_whitespace().collect();
+        let mut cmd = Command::new(command_parts[0]);
+
+        // Add the rest of the command parts as arguments
+        for part in &command_parts[1..] {
+            cmd.arg(part);
+        }
+
+        // Add user-provided arguments
+        for arg in &args.args {
+            cmd.arg(arg);
+        }
+
+        match cmd.output().await {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let status = output.status.code().unwrap_or(-1);
+
+                let result_text = format!(
+                    "RSpec Command: {} {}\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
+                    self.rspec_command,
+                    args.args.join(" "),
+                    status,
+                    stdout,
+                    stderr
+                );
+
+                Ok(CallToolResult::success(vec![Content::text(result_text)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("Command failed: {}", e),
+                None,
+            )),
+        }
+    }
+
     #[tool(
         description = "Run RSpec tests for a specific file with optional line number targeting. Accepts file paths ending in '_spec.rb' with optional array of line numbers"
     )]
-    async fn run_rspec(
+    async fn run_rspec_file(
         &self,
-        Parameters(args): Parameters<TestRunnerArgs>,
+        Parameters(args): Parameters<RspecFileArgs>,
     ) -> Result<CallToolResult, McpError> {
         // Parse the file path and validate format
         let line_numbers = args.line_numbers.unwrap_or_default();
@@ -171,7 +428,7 @@ impl ServerHandler for TestRunner {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Test runner server using configurable command. Tool: run_rspec (run tests for a file)."
+                "Test runner server using configurable command. Tools: run_rspec (raw command access), run_rspec_file (run tests for a file)."
                     .to_string(),
             ),
         }
@@ -200,27 +457,28 @@ mod tests {
         let router = TestRunner::new("bundle exec rspec".to_string()).tool_router;
 
         let tools = router.list_all();
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(tool_names.contains(&"run_rspec"));
+        assert!(tool_names.contains(&"run_rspec_file"));
     }
 
     #[test]
-    fn test_test_runner_args_deserialization() {
+    fn test_rspec_file_args_deserialization() {
         let json = r#"
         {
             "file": "spec/models/user_spec.rb"
         }
         "#;
 
-        let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
+        let args: RspecFileArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.file, "spec/models/user_spec.rb");
         assert_eq!(args.line_numbers, None);
     }
 
     #[test]
-    fn test_test_runner_args_with_line_numbers() {
+    fn test_rspec_file_args_with_line_numbers() {
         let json = r#"
         {
             "file": "spec/models/user_spec.rb",
@@ -228,7 +486,7 @@ mod tests {
         }
         "#;
 
-        let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
+        let args: RspecFileArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.file, "spec/models/user_spec.rb");
         assert_eq!(args.line_numbers, Some(vec![37, 87]));
     }
@@ -329,5 +587,98 @@ mod tests {
                 "File must be an RSpec test file (*_spec.rb)"
             );
         }
+    }
+
+    #[test]
+    fn test_validate_rspec_args_allowed_flags() {
+        let valid_args = vec![
+            "--format".to_string(),
+            "json".to_string(),
+            "--tag".to_string(),
+            "slow".to_string(),
+        ];
+        assert!(validate_rspec_args(&valid_args).is_ok());
+    }
+
+    #[test]
+    fn test_validate_rspec_args_disallowed_flag() {
+        let invalid_args = vec!["--invalid-flag".to_string()];
+        let result = validate_rspec_args(&invalid_args);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Disallowed flag: --invalid-flag")
+        );
+    }
+
+    #[test]
+    fn test_validate_rspec_args_dangerous_characters() {
+        let dangerous_args = vec!["--format".to_string(), "json; rm -rf /".to_string()];
+        let result = validate_rspec_args(&dangerous_args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("dangerous character"));
+    }
+
+    #[test]
+    fn test_validate_output_path_safe() {
+        assert!(ParsedFilePath::validate_output_path("tmp/test_results.xml").is_ok());
+        assert!(ParsedFilePath::validate_output_path("reports/coverage.html").is_ok());
+    }
+
+    #[test]
+    fn test_validate_output_path_unsafe() {
+        assert!(ParsedFilePath::validate_output_path("../../../etc/passwd").is_err());
+        assert!(ParsedFilePath::validate_output_path("/tmp/test.xml").is_err());
+        assert!(ParsedFilePath::validate_output_path("home/test.xml").is_err());
+    }
+
+    #[test]
+    fn test_validate_require_path() {
+        assert!(ParsedFilePath::validate_require_path("spec/support/helper.rb").is_ok());
+        assert!(ParsedFilePath::validate_require_path("../malicious.rb").is_err());
+        assert!(ParsedFilePath::validate_require_path("helper.py").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_value() {
+        assert!(ParsedFilePath::sanitize_value("normal_value").is_ok());
+        assert!(ParsedFilePath::sanitize_value("value_with_numbers_123").is_ok());
+        assert!(ParsedFilePath::sanitize_value("value; rm -rf /").is_err());
+        assert!(ParsedFilePath::sanitize_value("value$(malicious)").is_err());
+    }
+
+    #[test]
+    fn test_validate_numeric_value() {
+        assert!(ParsedFilePath::validate_numeric_value("123", "--seed").is_ok());
+        assert!(ParsedFilePath::validate_numeric_value("0", "--seed").is_ok());
+        assert!(ParsedFilePath::validate_numeric_value("abc", "--seed").is_err());
+        assert!(ParsedFilePath::validate_numeric_value("-123", "--seed").is_err());
+    }
+
+    #[test]
+    fn test_validate_rspec_args_too_many() {
+        let too_many_args: Vec<String> = (0..51).map(|i| format!("arg{}", i)).collect();
+        let result = validate_rspec_args(&too_many_args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Too many arguments"));
+    }
+
+    #[test]
+    fn test_validate_rspec_args_file_paths() {
+        let args_with_files = vec![
+            "spec/user_spec.rb".to_string(),
+            "spec/models/product_spec.rb".to_string(),
+        ];
+        assert!(validate_rspec_args(&args_with_files).is_ok());
+
+        let args_with_invalid_files = vec!["spec/user.rb".to_string()];
+        let result = validate_rspec_args(&args_with_invalid_files);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("File must be an RSpec test file")
+        );
     }
 }
