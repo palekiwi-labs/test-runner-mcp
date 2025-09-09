@@ -9,7 +9,7 @@ use rmcp::{
 use tokio::process::Command;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct TestRunnerArgs {
+pub struct RspecFileArgs {
     #[schemars(
         description = "RSpec test file path (must end with '_spec.rb')",
         example = "spec/models/user_spec.rb"
@@ -154,7 +154,7 @@ impl TestRunner {
     )]
     async fn run_rspec_file(
         &self,
-        Parameters(args): Parameters<TestRunnerArgs>,
+        Parameters(args): Parameters<RspecFileArgs>,
     ) -> Result<CallToolResult, McpError> {
         // Parse the file path and validate format
         let line_numbers = args.line_numbers.unwrap_or_default();
@@ -261,20 +261,20 @@ mod tests {
     }
 
     #[test]
-    fn test_test_runner_args_deserialization() {
+    fn test_rspec_file_args_deserialization() {
         let json = r#"
         {
             "file": "spec/models/user_spec.rb"
         }
         "#;
 
-        let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
+        let args: RspecFileArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.file, "spec/models/user_spec.rb");
         assert_eq!(args.line_numbers, None);
     }
 
     #[test]
-    fn test_test_runner_args_with_line_numbers() {
+    fn test_rspec_file_args_with_line_numbers() {
         let json = r#"
         {
             "file": "spec/models/user_spec.rb",
@@ -282,7 +282,7 @@ mod tests {
         }
         "#;
 
-        let args: TestRunnerArgs = serde_json::from_str(json).unwrap();
+        let args: RspecFileArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.file, "spec/models/user_spec.rb");
         assert_eq!(args.line_numbers, Some(vec![37, 87]));
     }
