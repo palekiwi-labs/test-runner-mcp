@@ -14,3 +14,10 @@
 
 ### Low Priority
 - [ ] Update tool description to document new file path with line numbers feature
+
+
+## Idea Inbox
+- [ ] use JSON as rspec response, parse it and return only the most relevant, well formatted data:
+  - number of examples run
+  - number of failures
+  - failure details (anyhing from rspec: backtrace, error name, failing expectation, line numbers, etc)
