@@ -118,16 +118,46 @@ impl ParsedFilePath {
         Ok(())
     }
 
-    fn from_cypress_args(file_path: &str) -> Result<Self, String> {
+    fn strip_working_dir_prefix(file_path: &str, working_dir: &str) -> String {
+        // Normalize the working directory path (remove trailing slash, handle "." case)
+        let normalized_working_dir = if working_dir == "." {
+            "".to_string()
+        } else {
+            working_dir.trim_end_matches('/').to_string() + "/"
+        };
+
+        // If working_dir is "." (current directory), don't strip anything
+        if normalized_working_dir.is_empty() {
+            return file_path.to_string();
+        }
+
+        // Remove optional "./" prefix for comparison
+        let clean_path = file_path.strip_prefix("./").unwrap_or(file_path);
+
+        // If the path starts with the working directory, strip it
+        if let Some(stripped) = clean_path.strip_prefix(&normalized_working_dir) {
+            stripped.to_string()
+        } else {
+            // If path doesn't start with working directory, return as-is
+            file_path.to_string()
+        }
+    }
+
+
+
+    fn from_cypress_args_with_working_dir(file_path: &str, working_dir: &str) -> Result<Self, String> {
         if file_path.is_empty() {
             return Err("Empty file path".to_string());
         }
 
-        // Validate file path format
+        // Validate file path format with original path
         Self::validate_cypress_file_path(file_path)?;
 
+        // Strip working directory prefix if present
+        let stripped_path = Self::strip_working_dir_prefix(file_path, working_dir);
+
         Ok(ParsedFilePath {
-            file_path: file_path.to_string(),
+            file_path: stripped_path,
             line_numbers: vec![], // Cypress doesn't use line numbers
         })
     }
@@ -138,15 +168,17 @@ pub struct TestRunner {
     tool_router: ToolRouter<TestRunner>,
     rspec_command: String,
     cypress_command: String,
+    cypress_working_dir: String,
 }
 
 #[tool_router]
 impl TestRunner {
-    pub fn new(rspec_command: String, cypress_command: String) -> Self {
+    pub fn new(rspec_command: String, cypress_command: String, cypress_working_dir: String) -> Self {
         Self {
             tool_router: Self::tool_router(),
             rspec_command,
             cypress_command,
+            cypress_working_dir,
         }
     }
 
@@ -223,8 +255,8 @@ impl TestRunner {
         &self,
         Parameters(args): Parameters<CypressArgs>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse the file path and validate format
-        let parsed_file = match ParsedFilePath::from_cypress_args(&args.file) {
+        // Parse the file path and validate format, handling working directory
+        let parsed_file = match ParsedFilePath::from_cypress_args_with_working_dir(&args.file, &self.cypress_working_dir) {
             Ok(parsed) => parsed,
             Err(e) => {
                 return Err(McpError::invalid_params(
@@ -334,7 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_rspec_tool() {
-        let router = TestRunner::new("bundle exec rspec".to_string(), "npx cypress run --spec".to_string()).tool_router;
+        let router = TestRunner::new("bundle exec rspec".to_string(), "npx cypress run --spec".to_string(), ".".to_string()).tool_router;
 
         let tools = router.list_all();
         assert_eq!(tools.len(), 2);
@@ -559,6 +591,68 @@ mod tests {
             assert!(result.is_err(), "Should reject {}", case);
             assert_eq!(result.unwrap_err(), "Invalid characters in file path");
         }
+    }
+
+    #[test]
+    fn test_strip_working_dir_prefix_current_dir() {
+        let result = ParsedFilePath::strip_working_dir_prefix("cypress/e2e/test.cy.js", ".");
+        assert_eq!(result, "cypress/e2e/test.cy.js");
+    }
+
+    #[test]
+    fn test_strip_working_dir_prefix_with_cypress_dir() {
+        let result = ParsedFilePath::strip_working_dir_prefix("cypress/cypress/e2e/test.cy.js", "cypress");
+        assert_eq!(result, "cypress/e2e/test.cy.js");
+        
+        let result = ParsedFilePath::strip_working_dir_prefix("cypress/cypress/e2e/test.cy.js", "cypress/");
+        assert_eq!(result, "cypress/e2e/test.cy.js");
+    }
+
+    #[test]
+    fn test_strip_working_dir_prefix_no_match() {
+        let result = ParsedFilePath::strip_working_dir_prefix("e2e/test.cy.js", "cypress");
+        assert_eq!(result, "e2e/test.cy.js");
+    }
+
+    #[test]
+    fn test_strip_working_dir_prefix_with_dot_prefix() {
+        let result = ParsedFilePath::strip_working_dir_prefix("./cypress/cypress/e2e/test.cy.js", "cypress");
+        assert_eq!(result, "cypress/e2e/test.cy.js");
+    }
+
+    #[test]
+    fn test_from_cypress_args_with_working_dir_current() {
+        let parsed = ParsedFilePath::from_cypress_args_with_working_dir("cypress/e2e/test.cy.js", ".").unwrap();
+        assert_eq!(parsed.file_path, "cypress/e2e/test.cy.js");
+        assert!(parsed.line_numbers.is_empty());
+    }
+
+    #[test]
+    fn test_from_cypress_args_with_working_dir_cypress() {
+        let parsed = ParsedFilePath::from_cypress_args_with_working_dir("cypress/cypress/e2e/test.cy.js", "cypress").unwrap();
+        assert_eq!(parsed.file_path, "cypress/e2e/test.cy.js");
+        assert!(parsed.line_numbers.is_empty());
+    }
+
+    #[test]
+    fn test_from_cypress_args_with_working_dir_no_strip_needed() {
+        let parsed = ParsedFilePath::from_cypress_args_with_working_dir("e2e/test.cy.js", "cypress").unwrap();
+        assert_eq!(parsed.file_path, "e2e/test.cy.js");
+        assert!(parsed.line_numbers.is_empty());
+    }
+
+    #[test]
+    fn test_from_cypress_args_with_working_dir_validation_still_works() {
+        let result = ParsedFilePath::from_cypress_args_with_working_dir("cypress/e2e/test.js", "cypress");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "File must be a Cypress test file (*.cy.js or *.cy.ts)");
+    }
+
+    #[test]
+    fn test_from_cypress_args_with_working_dir_empty_path() {
+        let result = ParsedFilePath::from_cypress_args_with_working_dir("", "cypress");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Empty file path");
     }
 
 
