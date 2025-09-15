@@ -23,6 +23,15 @@ pub struct TestRunnerArgs {
     pub line_numbers: Option<Vec<i32>>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CypressArgs {
+    #[schemars(
+        description = "Cypress test file path (must end with '.cy.js' or '.cy.ts')",
+        example = "cypress/e2e/user-login.cy.js"
+    )]
+    pub file: String,
+}
+
 #[derive(Debug)]
 pub struct ParsedFilePath {
     pub file_path: String,
@@ -79,20 +88,62 @@ impl ParsedFilePath {
 
         Ok(())
     }
+
+    fn validate_cypress_file_path(path: &str) -> Result<(), String> {
+        // Block dangerous characters first
+        if path.contains('\0') || path.contains('\n') {
+            return Err("Invalid characters in file path".to_string());
+        }
+
+        // Prevent path traversal
+        if path.contains("../") {
+            return Err("Path traversal not allowed".to_string());
+        }
+
+        // Remove optional "./" prefix for validation
+        let clean_path = path.strip_prefix("./").unwrap_or(path);
+
+        // Must end with .cy.js or .cy.ts and have content before it
+        if !clean_path.ends_with(".cy.js") && !clean_path.ends_with(".cy.ts") {
+            return Err("File must be a Cypress test file (*.cy.js or *.cy.ts)".to_string());
+        }
+
+        if clean_path == ".cy.js" || clean_path == ".cy.ts" {
+            return Err("Invalid file path format".to_string());
+        }
+
+        Ok(())
+    }
+
+    fn from_cypress_args(file_path: &str) -> Result<Self, String> {
+        if file_path.is_empty() {
+            return Err("Empty file path".to_string());
+        }
+
+        // Validate file path format
+        Self::validate_cypress_file_path(file_path)?;
+
+        Ok(ParsedFilePath {
+            file_path: file_path.to_string(),
+            line_numbers: vec![], // Cypress doesn't use line numbers
+        })
+    }
 }
 
 #[derive(Clone)]
 pub struct TestRunner {
     tool_router: ToolRouter<TestRunner>,
     rspec_command: String,
+    cypress_command: String,
 }
 
 #[tool_router]
 impl TestRunner {
-    pub fn new(rspec_command: String) -> Self {
+    pub fn new(rspec_command: String, cypress_command: String) -> Self {
         Self {
             tool_router: Self::tool_router(),
             rspec_command,
+            cypress_command,
         }
     }
 
@@ -159,6 +210,55 @@ impl TestRunner {
             )),
         }
     }
+
+    #[tool(
+        description = "Run Cypress tests for a specific file. Accepts file paths ending in '.cy.js' or '.cy.ts'"
+    )]
+    async fn run_cypress(
+        &self,
+        Parameters(args): Parameters<CypressArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // Parse the file path and validate format
+        let parsed_file = match ParsedFilePath::from_cypress_args(&args.file) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                return Err(McpError::invalid_params(
+                    format!("Invalid parameters: {}", e),
+                    None,
+                ));
+            }
+        };
+
+        let command_parts: Vec<&str> = self.cypress_command.split_whitespace().collect();
+        let mut cmd = Command::new(command_parts[0]);
+
+        // Add the rest of the command parts as arguments
+        for part in &command_parts[1..] {
+            cmd.arg(part);
+        }
+
+        // Add the Cypress file argument
+        cmd.arg(&parsed_file.file_path);
+
+        match cmd.output().await {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let status = output.status.code().unwrap_or(-1);
+
+                let result_text = format!(
+                    "Test Results for: {}\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
+                    parsed_file.file_path, status, stdout, stderr
+                );
+
+                Ok(CallToolResult::success(vec![Content::text(result_text)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("Command failed: {}", e),
+                None,
+            )),
+        }
+    }
 }
 
 #[tool_handler]
@@ -171,7 +271,7 @@ impl ServerHandler for TestRunner {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Test runner server using configurable command. Tool: run_rspec (run tests for a file)."
+                "Test runner server using configurable commands. Tools: run_rspec (run RSpec tests), run_cypress (run Cypress tests)."
                     .to_string(),
             ),
         }
@@ -197,13 +297,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_rspec_tool() {
-        let router = TestRunner::new("bundle exec rspec".to_string()).tool_router;
+        let router = TestRunner::new("bundle exec rspec".to_string(), "npx cypress run --spec".to_string()).tool_router;
 
         let tools = router.list_all();
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(tool_names.contains(&"run_rspec"));
+        assert!(tool_names.contains(&"run_cypress"));
     }
 
     #[test]
@@ -328,6 +429,98 @@ mod tests {
                 result.unwrap_err(),
                 "File must be an RSpec test file (*_spec.rb)"
             );
+        }
+    }
+
+    #[test]
+    fn test_cypress_args_deserialization() {
+        let json = r#"
+        {
+            "file": "cypress/e2e/user-login.cy.js"
+        }
+        "#;
+
+        let args: CypressArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.file, "cypress/e2e/user-login.cy.js");
+    }
+
+    #[test]
+    fn test_from_cypress_args_valid_js() {
+        let parsed = ParsedFilePath::from_cypress_args("cypress/e2e/user-login.cy.js").unwrap();
+        assert_eq!(parsed.file_path, "cypress/e2e/user-login.cy.js");
+        assert!(parsed.line_numbers.is_empty());
+    }
+
+    #[test]
+    fn test_from_cypress_args_valid_ts() {
+        let parsed = ParsedFilePath::from_cypress_args("cypress/e2e/user-login.cy.ts").unwrap();
+        assert_eq!(parsed.file_path, "cypress/e2e/user-login.cy.ts");
+        assert!(parsed.line_numbers.is_empty());
+    }
+
+    #[test]
+    fn test_from_cypress_args_with_optional_prefix() {
+        let parsed = ParsedFilePath::from_cypress_args("./cypress/e2e/user-login.cy.js").unwrap();
+        assert_eq!(parsed.file_path, "./cypress/e2e/user-login.cy.js");
+        assert!(parsed.line_numbers.is_empty());
+    }
+
+    #[test]
+    fn test_from_cypress_args_empty_file_path() {
+        let result = ParsedFilePath::from_cypress_args("");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Empty file path");
+    }
+
+    #[test]
+    fn test_validate_cypress_file_extension() {
+        let test_cases = vec![
+            "cypress/e2e/user-login.js",
+            "cypress/e2e/user-login.ts",
+            "cypress/e2e/user-login.spec.js",
+            "cypress/e2e/user-login.test.js",
+            "cypress/e2e/user-login.rb",
+        ];
+
+        for case in test_cases {
+            let result = ParsedFilePath::from_cypress_args(case);
+            assert!(result.is_err(), "Should reject {}", case);
+            assert_eq!(
+                result.unwrap_err(),
+                "File must be a Cypress test file (*.cy.js or *.cy.ts)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_cypress_path_traversal_prevention() {
+        let result = ParsedFilePath::from_cypress_args("../cypress/user-login.cy.js");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Path traversal not allowed");
+    }
+
+    #[test]
+    fn test_validate_cypress_only_extension() {
+        let test_cases = vec![".cy.js", ".cy.ts"];
+
+        for case in test_cases {
+            let result = ParsedFilePath::from_cypress_args(case);
+            assert!(result.is_err(), "Should reject {}", case);
+            assert_eq!(result.unwrap_err(), "Invalid file path format");
+        }
+    }
+
+    #[test]
+    fn test_validate_cypress_dangerous_characters() {
+        let test_cases = vec![
+            "cypress/user-login.cy.js\0",
+            "cypress/user-login.cy.js\n",
+        ];
+
+        for case in test_cases {
+            let result = ParsedFilePath::from_cypress_args(case);
+            assert!(result.is_err(), "Should reject {}", case);
+            assert_eq!(result.unwrap_err(), "Invalid characters in file path");
         }
     }
 }

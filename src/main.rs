@@ -23,6 +23,9 @@ struct Cli {
 
     #[arg(short = 'c', long, default_value = "bundle exec rspec")]
     rspec_command: String,
+
+    #[arg(short = 'y', long, default_value = "npx cypress run --spec")]
+    cypress_command: String,
 }
 
 #[tokio::main]
@@ -66,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let ct = sse_server.with_service(move || TestRunner::new(cli.rspec_command.clone()));
+    let ct = sse_server.with_service(move || TestRunner::new(cli.rspec_command.clone(), cli.cypress_command.clone()));
 
     tracing::info!("Test Runner MCP server is running!");
     tracing::info!("SSE endpoint: http://{}/sse", bind_address);
