@@ -515,28 +515,28 @@ mod tests {
 
     #[test]
     fn test_from_cypress_args_valid_js() {
-        let parsed = ParsedFilePath::from_cypress_args("cypress/e2e/user-login.cy.js").unwrap();
+        let parsed = ParsedFilePath::from_cypress_args_with_working_dir("cypress/e2e/user-login.cy.js", ".").unwrap();
         assert_eq!(parsed.file_path, "cypress/e2e/user-login.cy.js");
         assert!(parsed.line_numbers.is_empty());
     }
 
     #[test]
     fn test_from_cypress_args_valid_ts() {
-        let parsed = ParsedFilePath::from_cypress_args("cypress/e2e/user-login.cy.ts").unwrap();
+        let parsed = ParsedFilePath::from_cypress_args_with_working_dir("cypress/e2e/user-login.cy.ts", ".").unwrap();
         assert_eq!(parsed.file_path, "cypress/e2e/user-login.cy.ts");
         assert!(parsed.line_numbers.is_empty());
     }
 
     #[test]
     fn test_from_cypress_args_with_optional_prefix() {
-        let parsed = ParsedFilePath::from_cypress_args("./cypress/e2e/user-login.cy.js").unwrap();
+        let parsed = ParsedFilePath::from_cypress_args_with_working_dir("./cypress/e2e/user-login.cy.js", ".").unwrap();
         assert_eq!(parsed.file_path, "./cypress/e2e/user-login.cy.js");
         assert!(parsed.line_numbers.is_empty());
     }
 
     #[test]
     fn test_from_cypress_args_empty_file_path() {
-        let result = ParsedFilePath::from_cypress_args("");
+        let result = ParsedFilePath::from_cypress_args_with_working_dir("", ".");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Empty file path");
     }
@@ -552,7 +552,7 @@ mod tests {
         ];
 
         for case in test_cases {
-            let result = ParsedFilePath::from_cypress_args(case);
+            let result = ParsedFilePath::from_cypress_args_with_working_dir(case, ".");
             assert!(result.is_err(), "Should reject {}", case);
             assert_eq!(
                 result.unwrap_err(),
@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn test_validate_cypress_path_traversal_prevention() {
-        let result = ParsedFilePath::from_cypress_args("../cypress/user-login.cy.js");
+        let result = ParsedFilePath::from_cypress_args_with_working_dir("../cypress/user-login.cy.js", ".");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Path traversal not allowed");
     }
@@ -573,7 +573,7 @@ mod tests {
         let test_cases = vec![".cy.js", ".cy.ts"];
 
         for case in test_cases {
-            let result = ParsedFilePath::from_cypress_args(case);
+            let result = ParsedFilePath::from_cypress_args_with_working_dir(case, ".");
             assert!(result.is_err(), "Should reject {}", case);
             assert_eq!(result.unwrap_err(), "Invalid file path format");
         }
@@ -587,7 +587,7 @@ mod tests {
         ];
 
         for case in test_cases {
-            let result = ParsedFilePath::from_cypress_args(case);
+            let result = ParsedFilePath::from_cypress_args_with_working_dir(case, ".");
             assert!(result.is_err(), "Should reject {}", case);
             assert_eq!(result.unwrap_err(), "Invalid characters in file path");
         }
