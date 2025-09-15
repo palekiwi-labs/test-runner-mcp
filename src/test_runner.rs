@@ -229,16 +229,9 @@ impl TestRunner {
             }
         };
 
-        let command_parts: Vec<&str> = self.cypress_command.split_whitespace().collect();
-        let mut cmd = Command::new(command_parts[0]);
-
-        // Add the rest of the command parts as arguments
-        for part in &command_parts[1..] {
-            cmd.arg(part);
-        }
-
-        // Add the Cypress file argument
-        cmd.arg(&parsed_file.file_path);
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c");
+        cmd.arg(format!("{} {}", self.cypress_command, parsed_file.file_path));
 
         match cmd.output().await {
             Ok(output) => {
