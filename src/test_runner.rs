@@ -7,6 +7,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use tokio::process::Command;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TestRunnerArgs {
@@ -30,6 +31,61 @@ pub struct CypressArgs {
         example = "cypress/e2e/user-login.cy.js"
     )]
     pub file: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CypressStats {
+    pub suites: u32,
+    pub tests: u32,
+    pub passes: u32,
+    pub pending: u32,
+    pub failures: u32,
+    pub start: String,
+    pub end: String,
+    pub duration: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CypressCodeFrame {
+    pub line: u32,
+    pub column: u32,
+    #[serde(rename = "originalFile")]
+    pub original_file: String,
+    #[serde(rename = "relativeFile")]
+    pub relative_file: String,
+    #[serde(rename = "absoluteFile")]
+    pub absolute_file: String,
+    pub frame: String,
+    pub language: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CypressError {
+    pub message: String,
+    pub name: String,
+    #[serde(rename = "codeFrame")]
+    pub code_frame: Option<CypressCodeFrame>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CypressTest {
+    pub title: String,
+    #[serde(rename = "fullTitle")]
+    pub full_title: String,
+    pub file: Option<String>,
+    pub duration: Option<u32>,
+    #[serde(rename = "currentRetry")]
+    pub current_retry: u32,
+    pub err: Option<CypressError>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CypressResults {
+    pub stats: CypressStats,
+    pub tests: Vec<CypressTest>,
+    pub pending: Vec<CypressTest>,
+    pub failures: Vec<CypressTest>,
+    pub passes: Vec<CypressTest>,
 }
 
 #[derive(Debug)]
@@ -147,6 +203,46 @@ impl TestRunner {
         }
     }
 
+    fn extract_json_from_cypress_output(output: &str) -> Result<String, String> {
+        // Find the first opening brace which marks the start of JSON
+        if let Some(start_pos) = output.find('{') {
+            let json_portion = &output[start_pos..];
+            Ok(json_portion.to_string())
+        } else {
+            Err("No JSON found in Cypress output".to_string())
+        }
+    }
+
+    fn parse_cypress_results(json_str: &str) -> Result<CypressResults, String> {
+        serde_json::from_str(json_str)
+            .map_err(|e| format!("Failed to parse Cypress JSON: {}", e))
+    }
+
+    fn filter_cypress_results(results: CypressResults) -> CypressResults {
+        let filter_test = |test: CypressTest| -> CypressTest {
+            CypressTest {
+                title: test.title,
+                full_title: test.full_title,
+                file: test.file,
+                duration: test.duration,
+                current_retry: test.current_retry,
+                err: test.err.map(|err| CypressError {
+                    message: err.message,
+                    name: err.name,
+                    code_frame: err.code_frame,
+                }),
+            }
+        };
+
+        CypressResults {
+            stats: results.stats,
+            tests: results.tests.into_iter().map(filter_test).collect(),
+            pending: results.pending.into_iter().map(filter_test).collect(),
+            failures: results.failures.into_iter().map(filter_test).collect(),
+            passes: results.passes.into_iter().map(filter_test).collect(),
+        }
+    }
+
     #[tool(
         description = "Run RSpec tests for a specific file with optional line number targeting. Accepts file paths ending in '_spec.rb' with optional array of line numbers"
     )]
@@ -239,12 +335,51 @@ impl TestRunner {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let status = output.status.code().unwrap_or(-1);
 
-                let result_text = format!(
-                    "Test Results for: {}\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
-                    parsed_file.file_path, status, stdout, stderr
-                );
-
-                Ok(CallToolResult::success(vec![Content::text(result_text)]))
+                // Try to extract and parse JSON from Cypress output
+                match Self::extract_json_from_cypress_output(&stdout) {
+                    Ok(json_str) => {
+                        match Self::parse_cypress_results(&json_str) {
+                            Ok(results) => {
+                                // Filter out noise and return clean JSON
+                                let filtered_results = Self::filter_cypress_results(results);
+                                
+                                match serde_json::to_string_pretty(&filtered_results) {
+                                    Ok(clean_json) => {
+                                        let result_text = format!(
+                                            "Test Results for: {}\nExit Code: {}\n\nFiltered Results:\n{}",
+                                            parsed_file.file_path, status, clean_json
+                                        );
+                                        Ok(CallToolResult::success(vec![Content::text(result_text)]))
+                                    }
+                                    Err(e) => {
+                                        // Fallback to original output if JSON serialization fails
+                                        let result_text = format!(
+                                            "Test Results for: {} (JSON serialization failed: {})\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
+                                            parsed_file.file_path, e, status, stdout, stderr
+                                        );
+                                        Ok(CallToolResult::success(vec![Content::text(result_text)]))
+                                    }
+                                }
+                            }
+                            Err(parse_error) => {
+                                // Fallback to original output if JSON parsing fails
+                                let result_text = format!(
+                                    "Test Results for: {} (JSON parsing failed: {})\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
+                                    parsed_file.file_path, parse_error, status, stdout, stderr
+                                );
+                                Ok(CallToolResult::success(vec![Content::text(result_text)]))
+                            }
+                        }
+                    }
+                    Err(extract_error) => {
+                        // Fallback to original output if JSON extraction fails
+                        let result_text = format!(
+                            "Test Results for: {} (JSON extraction failed: {})\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
+                            parsed_file.file_path, extract_error, status, stdout, stderr
+                        );
+                        Ok(CallToolResult::success(vec![Content::text(result_text)]))
+                    }
+                }
             }
             Err(e) => Err(McpError::internal_error(
                 format!("Command failed: {}", e),
@@ -515,5 +650,88 @@ mod tests {
             assert!(result.is_err(), "Should reject {}", case);
             assert_eq!(result.unwrap_err(), "Invalid characters in file path");
         }
+    }
+
+    #[test]
+    fn test_extract_json_from_cypress_output() {
+        let output = r#"Warning: The following browser launch options were provided but are not supported by electron
+
+ - args
+[3977:0915/103024.520574:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Address does not contain a colon
+{
+  "stats": {
+    "suites": 1,
+    "tests": 1,
+    "passes": 0,
+    "pending": 0,
+    "failures": 1
+  }
+}"#;
+
+        let result = TestRunner::extract_json_from_cypress_output(output);
+        assert!(result.is_ok());
+        
+        let json_str = result.unwrap();
+        assert!(json_str.starts_with('{'));
+        assert!(json_str.contains("stats"));
+    }
+
+    #[test]
+    fn test_extract_json_no_json_found() {
+        let output = "Some output without JSON";
+        let result = TestRunner::extract_json_from_cypress_output(output);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "No JSON found in Cypress output");
+    }
+
+    #[test]
+    fn test_parse_cypress_results() {
+        let json_str = r#"{
+            "stats": {
+                "suites": 1,
+                "tests": 1,
+                "passes": 0,
+                "pending": 0,
+                "failures": 1,
+                "start": "2025-09-15T10:30:26.416Z",
+                "end": "2025-09-15T10:30:40.850Z",
+                "duration": 14434
+            },
+            "tests": [
+                {
+                    "title": "Test title",
+                    "fullTitle": "Full test title",
+                    "file": null,
+                    "duration": 1000,
+                    "currentRetry": 0,
+                    "err": {
+                        "message": "Test error message",
+                        "name": "CypressError",
+                        "codeFrame": {
+                            "line": 23,
+                            "column": 47,
+                            "originalFile": "test.cy.js",
+                            "relativeFile": "test.cy.js",
+                            "absoluteFile": "/path/test.cy.js",
+                            "frame": "test code frame",
+                            "language": "js"
+                        }
+                    }
+                }
+            ],
+            "pending": [],
+            "failures": [],
+            "passes": []
+        }"#;
+
+        let result = TestRunner::parse_cypress_results(json_str);
+        assert!(result.is_ok());
+        
+        let parsed = result.unwrap();
+        assert_eq!(parsed.stats.suites, 1);
+        assert_eq!(parsed.stats.tests, 1);
+        assert_eq!(parsed.tests.len(), 1);
+        assert_eq!(parsed.tests[0].title, "Test title");
+        assert!(parsed.tests[0].err.is_some());
     }
 }
