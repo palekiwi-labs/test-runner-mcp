@@ -8,6 +8,7 @@ use tracing_subscriber::{
 };
 
 mod test_runner;
+mod cypress;
 use crate::test_runner::TestRunner;
 
 #[derive(Parser, Debug)]
