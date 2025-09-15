@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CypressStats {
@@ -28,10 +29,28 @@ pub struct CypressCodeFrame {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CypressError {
-    pub message: String,
-    pub name: String,
+    pub message: Option<String>,
+    pub name: Option<String>,
     #[serde(rename = "codeFrame")]
     pub code_frame: Option<CypressCodeFrame>,
+}
+
+fn deserialize_err<'de, D>(deserializer: D) -> Result<Option<CypressError>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+    
+    // If the error object is empty {}, return None
+    if value.as_object().map_or(false, |obj| obj.is_empty()) {
+        return Ok(None);
+    }
+    
+    // Otherwise, try to deserialize as CypressError
+    match serde_json::from_value(value) {
+        Ok(err) => Ok(Some(err)),
+        Err(_) => Ok(None),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,6 +62,7 @@ pub struct CypressTest {
     pub duration: Option<u32>,
     #[serde(rename = "currentRetry")]
     pub current_retry: u32,
+    #[serde(deserialize_with = "deserialize_err")]
     pub err: Option<CypressError>,
 }
 
@@ -180,5 +200,57 @@ mod tests {
         assert_eq!(parsed.tests.len(), 1);
         assert_eq!(parsed.tests[0].title, "Test title");
         assert!(parsed.tests[0].err.is_some());
+    }
+
+    #[test]
+    fn test_parse_results_with_empty_error() {
+        let json_str = r#"{
+            "stats": {
+                "suites": 1,
+                "tests": 1,
+                "passes": 1,
+                "pending": 0,
+                "failures": 0,
+                "start": "2025-09-15T10:57:19.194Z",
+                "end": "2025-09-15T10:57:28.398Z",
+                "duration": 9204
+            },
+            "tests": [
+                {
+                    "title": "Allows searching for a package available on a date",
+                    "fullTitle": "Date search Allows searching for a package available on a date",
+                    "file": null,
+                    "duration": 9160,
+                    "currentRetry": 0,
+                    "err": {}
+                }
+            ],
+            "pending": [],
+            "failures": [],
+            "passes": [
+                {
+                    "title": "Allows searching for a package available on a date",
+                    "fullTitle": "Date search Allows searching for a package available on a date",
+                    "file": null,
+                    "duration": 9160,
+                    "currentRetry": 0,
+                    "err": {}
+                }
+            ]
+        }"#;
+
+        let result = parse_results(json_str);
+        assert!(result.is_ok());
+        
+        let parsed = result.unwrap();
+        assert_eq!(parsed.stats.suites, 1);
+        assert_eq!(parsed.stats.tests, 1);
+        assert_eq!(parsed.stats.passes, 1);
+        assert_eq!(parsed.stats.failures, 0);
+        assert_eq!(parsed.tests.len(), 1);
+        assert_eq!(parsed.passes.len(), 1);
+        assert_eq!(parsed.tests[0].title, "Allows searching for a package available on a date");
+        assert!(parsed.tests[0].err.is_none());
+        assert!(parsed.passes[0].err.is_none());
     }
 }
