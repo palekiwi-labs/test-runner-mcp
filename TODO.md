@@ -3,6 +3,7 @@
 ## PR #4 - File Path with Line Numbers Feature
 
 ### High Priority
+- [ ] use JSON format and parse it so it doesn't block on `binding.pry`
 - [x] Parse file path with optional line numbers from input (e.g., 'file.rb:37:87')
 - [x] Add file path format validation for rspec (_spec.rb endings, optional './' prefix)
 - [x] Implement validation logic with proper error handling for invalid inputs
