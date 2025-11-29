@@ -23,6 +23,21 @@ pub struct TestRunnerArgs {
     pub line_numbers: Option<Vec<i32>>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CargoTestArgs {
+    #[schemars(
+        description = "Test pattern or specific test name to run",
+        example = &"test_user_creation"
+    )]
+    pub pattern: Option<String>,
+
+    #[schemars(
+        description = "Additional cargo test arguments",
+        example = &"[\"--lib\", \"--verbose\"]"
+    )]
+    pub args: Option<Vec<String>>,
+}
+
 #[derive(Debug)]
 pub struct ParsedFilePath {
     pub file_path: String,
@@ -85,14 +100,16 @@ impl ParsedFilePath {
 pub struct TestRunner {
     tool_router: ToolRouter<TestRunner>,
     rspec_command: String,
+    cargo_command: String,
 }
 
 #[tool_router]
 impl TestRunner {
-    pub fn new(rspec_command: String) -> Self {
+    pub fn new(rspec_command: String, cargo_command: String) -> Self {
         Self {
             tool_router: Self::tool_router(),
             rspec_command,
+            cargo_command,
         }
     }
 
@@ -159,6 +176,52 @@ impl TestRunner {
             )),
         }
     }
+
+    #[tool(description = "Run cargo tests with optional pattern and arguments")]
+    async fn cargo_test(
+        &self,
+        Parameters(args): Parameters<CargoTestArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let command_parts: Vec<&str> = self.cargo_command.split_whitespace().collect();
+        let mut cmd = Command::new(command_parts[0]);
+
+        // Add base command parts
+        for part in &command_parts[1..] {
+            cmd.arg(part);
+        }
+
+        // Add pattern if provided
+        if let Some(pattern) = &args.pattern
+            && !pattern.trim().is_empty() {
+                cmd.arg(pattern);
+            }
+
+        // Add additional arguments if provided
+        if let Some(additional_args) = &args.args {
+            for arg in additional_args {
+                cmd.arg(arg);
+            }
+        }
+
+        match cmd.output().await {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let status = output.status.code().unwrap_or(-1);
+
+                let result_text = format!(
+                    "Cargo Test Results\nExit Code: {}\n\nOutput:\n{}\n\nErrors:\n{}",
+                    status, stdout, stderr
+                );
+
+                Ok(CallToolResult::success(vec![Content::text(result_text)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("Command failed: {}", e),
+                None,
+            )),
+        }
+    }
 }
 
 #[tool_handler]
@@ -171,7 +234,7 @@ impl ServerHandler for TestRunner {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Test runner server using configurable command. Tool: run_rspec (run tests for a file)."
+                "Test runner server using configurable commands. Tools: run_rspec (RSpec tests), cargo_test (Cargo tests)."
                     .to_string(),
             ),
         }
@@ -197,13 +260,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_rspec_tool() {
-        let router = TestRunner::new("bundle exec rspec".to_string()).tool_router;
+        let router =
+            TestRunner::new("bundle exec rspec".to_string(), "cargo test".to_string()).tool_router;
 
         let tools = router.list_all();
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(tool_names.contains(&"run_rspec"));
+        assert!(tool_names.contains(&"cargo_test"));
     }
 
     #[test]
@@ -329,5 +394,44 @@ mod tests {
                 "File must be an RSpec test file (*_spec.rb)"
             );
         }
+    }
+
+    #[test]
+    fn test_cargo_test_args_deserialization() {
+        let json = r#"
+        {
+            "pattern": "test_user"
+        }
+        "#;
+
+        let args: CargoTestArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.pattern, Some("test_user".to_string()));
+        assert_eq!(args.args, None);
+    }
+
+    #[test]
+    fn test_cargo_test_args_with_args() {
+        let json = r#"
+        {
+            "pattern": "test_user",
+            "args": ["--lib", "--verbose"]
+        }
+        "#;
+
+        let args: CargoTestArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.pattern, Some("test_user".to_string()));
+        assert_eq!(
+            args.args,
+            Some(vec!["--lib".to_string(), "--verbose".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_cargo_test_args_empty() {
+        let json = r#"{}"#;
+
+        let args: CargoTestArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.pattern, None);
+        assert_eq!(args.args, None);
     }
 }
